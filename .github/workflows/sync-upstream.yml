@@ -1,0 +1,67 @@
+name: Sync Upstream & Rebuild Image
+
+# 定时检测上游仓库（默认 Sliverkiss/CodeBuddy2api）是否有新提交：
+#   - 有更新  -> 合并到本 fork 的 main 并推送，随后重建并推送 Docker 镜像
+#   - 无更新  -> 什么都不做
+#
+# 可在 Actions 页面手动 Run workflow 立即检查一次。
+on:
+  schedule:
+    # 每天 4 次，对应北京时间 08:23 / 14:23 / 20:23 / 02:23
+    - cron: '23 0,6,12,18 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: '即使上游没有更新，也强制重新构建镜像'
+        type: boolean
+        default: false
+
+# contents: write -> 允许向 main 推送合并结果
+# packages: write -> 允许子 workflow 向 GHCR 推送镜像
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.sync.outputs.updated }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream into fork
+        id: sync
+        env:
+          # 需要换上游时，在仓库 Settings -> Variables 里改 UPSTREAM_REPO 即可
+          UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'Sliverkiss/CodeBuddy2api' }}
+          UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH || 'main' }}
+          TARGET_BRANCH: main
+          SYNC_CONFLICT_STRATEGY: ${{ vars.SYNC_CONFLICT_STRATEGY || 'theirs' }}
+          PROTECTED_PATHS: ${{ vars.PROTECTED_PATHS || '.github' }}
+          PUSH: 'true'
+        run: bash .github/scripts/sync-upstream.sh
+
+  build:
+    name: Rebuild image
+    needs: sync
+    if: needs.sync.outputs.updated == 'true' || inputs.force_rebuild == true
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    uses: ./.github/workflows/build-image.yml
+    with:
+      # 显式构建同步后的最新 main，而不是触发本次 workflow 的那个旧提交
+      ref: main
+      platforms: linux/amd64,linux/arm64

@@ -1,0 +1,27 @@
+# 构建镜像时不需要打进镜像的文件（减小体积，避免把密钥烤进镜像）
+.git
+.gitignore
+.github
+
+# 敏感信息：运行时通过 env_file / volume 挂载引入，绝不能打进镜像
+.env
+.env.*
+!.env.example
+.codebuddy_creds
+config/config.json
+config/*.json
+
+# 文档 / 部署编排
+*.md
+LICENSE
+docker-compose*.yml
+
+# 开发环境产物
+venv
+.venv
+**/__pycache__
+**/*.py[cod]
+*.log
+.idea
+.vscode
+.DS_Store

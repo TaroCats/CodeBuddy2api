@@ -1,0 +1,80 @@
+# CodeBuddy2API —— 基于 GitHub Container Registry 镜像的部署栈
+#
+# 与仓库里原有的 docker-compose.yml 的区别：
+#   docker-compose.yml       -> 用 sliverkiss 的镜像名，且会「本地构建」，适合改代码调试
+#   docker-compose.ghcr.yml  -> 使用本 fork 由 GitHub Actions 构建好的 GHCR 镜像，并带自动更新
+#
+# 用法：
+#   cp .env.example .env      # 首次部署，填好 CODEBUDDY_PASSWORD 等
+#   docker compose -f docker-compose.ghcr.yml up -d
+#   docker compose -f docker-compose.ghcr.yml logs -f
+#
+# 只想启动主程序、不要自动更新：
+#   docker compose -f docker-compose.ghcr.yml up -d codebuddy2api
+
+services:
+  codebuddy2api:
+    # 镜像由 .github/workflows/build-image.yml 构建并推送
+    # 如果你把仓库改到别的账号下，请把这里的 tarocats 换成你的 GitHub 用户名（必须全小写）
+    image: ghcr.io/tarocats/codebuddy2api:latest
+    container_name: codebuddy2api
+    restart: unless-stopped
+    # 每次都先尝试拉取最新镜像，配合 watchtower 实现自动更新
+    pull_policy: always
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./config:/app/config
+      - ./.codebuddy_creds:/app/.codebuddy_creds
+    env_file:
+      - .env
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      # 只有带这个标签的容器才会被 watchtower 管理
+      - "com.centurylinklabs.watchtower.enable=true"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # 自动更新：每隔几分钟检查 GHCR 上是否有新镜像，有就自动重新拉取并重建本容器
+  # 镜像走 ghcr.io（不是 Docker Hub），国内通常可直连；若访问不了可换成
+  # containrrr/watchtower:1.7.1（Docker Hub）或配置镜像加速。
+  # ---------------------------------------------------------------------------
+  watchtower:
+    image: ghcr.io/containrrr/watchtower:1.7.1
+    container_name: codebuddy2api-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Asia/Shanghai
+      # 只更新带 com.centurylinklabs.watchtower.enable=true 标签的容器
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # 检查间隔（秒）。300 = 5 分钟
+      WATCHTOWER_POLL_INTERVAL: "300"
+      # 更新后清理旧镜像，避免磁盘被占满
+      WATCHTOWER_CLEANUP: "true"
+      # 不要删除 volume，保证 config / 凭证不丢
+      WATCHTOWER_REMOVE_VOLUMES: "false"
+      # 新容器启动异常时回滚到旧镜像
+      WATCHTOWER_ROLLING_RESTART: "true"
+      WATCHTOWER_TIMEOUT: "30s"
+      # 排查问题时改成 "true"
+      WATCHTOWER_DEBUG: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

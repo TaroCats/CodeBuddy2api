@@ -1,0 +1,36 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+venv/
+.venv/
+env/
+ENV/
+
+# ---------- 敏感信息（务必不要提交） ----------
+.env
+.env.*
+!.env.example
+# CodeBuddy 凭证目录
+.codebuddy_creds/
+# Web UI 保存的运行期配置（可能含 API Key / 密码）
+config/config.json
+config/*.json
+
+# ---------- 日志 / 运行产物 ----------
+*.log
+logs/
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------- AI 助手工作目录 ----------
+.workbuddy/

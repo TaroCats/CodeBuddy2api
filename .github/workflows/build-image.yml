@@ -1,0 +1,116 @@
+name: Build & Push Docker Image
+
+# 触发方式：
+#  1. push 到 main / 打 v* 标签  —— 自动构建并推送
+#  2. 手动触发（Actions 页面 Run workflow）
+#  3. 被 sync-upstream.yml 以 workflow_call 复用调用（同步到上游新代码后重建镜像）
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.dockerignore'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '构建的目标架构（逗号分隔）'
+        type: string
+        default: 'linux/amd64,linux/arm64'
+  workflow_call:
+    inputs:
+      ref:
+        description: '要构建的 git ref'
+        type: string
+        required: false
+        default: 'main'
+      platforms:
+        description: '构建的目标架构（逗号分隔）'
+        type: string
+        required: false
+        default: 'linux/amd64,linux/arm64'
+
+# 推送到 GHCR 需要 packages: write
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Compute image name (lowercase)
+        id: img
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.img.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Job summary
+        run: |
+          {
+            echo "### 🐳 镜像已推送到 GHCR"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 镜像地址 | \`ghcr.io/${{ steps.img.outputs.name }}\` |"
+            echo "| 主标签 | \`${{ steps.meta.outputs.version }}\` |"
+            echo "| 目标架构 | \`${{ inputs.platforms || 'linux/amd64,linux/arm64' }}\` |"
+            echo "| 提交 | \`${{ github.sha }}\` |"
+            echo ""
+            echo "本次推送的全部标签："
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "> 拉取命令：\`docker pull ghcr.io/${{ steps.img.outputs.name }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
